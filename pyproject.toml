@@ -8,7 +8,10 @@ packages = [{include = "whisper_input_mac", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
+pyobjc-core = "^10.2"
 pyobjc-framework-cocoa = "^10.2"
+pyobjc-framework-ApplicationServices = "^10.2"
+pyobjc-framework-Quartz = "^10.2"
 lightning-whisper-mlx = "^0.0.10"
 ml-dtypes = "^0.3.0"
 

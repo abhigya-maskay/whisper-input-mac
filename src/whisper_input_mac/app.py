@@ -77,6 +77,9 @@ def main():
     # Initialize orchestrator
     orchestrator = TranscriptionOrchestrator(audio_service, icon_controller)
 
+    # Check permissions at startup
+    loop.run_until_complete(orchestrator.startup_permissions_check())
+
     # Start press lifecycle handler as background task
     press_handler_task = loop.create_task(orchestrator.handle_press_lifecycle())
 

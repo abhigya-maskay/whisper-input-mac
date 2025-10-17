@@ -1,32 +1,11 @@
-## Implementation Guide: Integrate Lightning Whisper MLX, including dependency installation, weight caching, and configuration exposure
+## Implementation Guide: Implement keystroke injection via `CGEvent` with clipboard fallback
 
-- [x] Inspect existing transcription interfaces in `src/whisper_input_mac` (search for modules like `transcription` or placeholders) to decide where the MLX-backed transcriber class should live; note any abstract base classes or event contracts to satisfy.
-- [x] Add Lightning Whisper MLX dependencies to `pyproject.toml` with `poetry add lightning-whisper-mlx ml_dtypes` (the latter is required by MLX) and run `poetry lock`; confirm `poetry install` completes on Apple Silicon machines and capture any extra system requirements in project notes.
-- [x] Create `src/whisper_input_mac/transcription/__init__.py` if missing and scaffold `src/whisper_input_mac/transcription/lightning_whisper_mlx.py` with a `LightningWhisperMLX` class that lazily loads the model on first transcription.
-  ```python
-  from pathlib import Path
-  from lightning_whisper_mlx import LightningWhisperMLX
-
-
-  class LightningWhisperTranscriber:
-      def __init__(self, model_name: str, cache_dir: Path) -> None:
-          self._model_name = model_name
-          self._cache_dir = cache_dir
-          self._pipeline = None
-
-      def _ensure_pipeline(self) -> None:
-          if self._pipeline is None:
-              self._pipeline = LightningWhisperMLX(model=self._model_name, download_root=self._cache_dir)
-
-      def transcribe_file(self, audio_path: Path) -> dict:
-          self._ensure_pipeline()
-          return self._pipeline.transcribe(str(audio_path))
-  ```
-- [x] Implement automatic cache directory resolution (default to `~/Library/Application Support/WhisperInputMac/models`) and allow overrides via environment variables or upcoming configuration loader; ensure directories are created with `Path.mkdir(parents=True, exist_ok=True)`.
-- [x] Expose configuration knobs (model name, temperature, language, prompt) via a dataclass or simple settings object and thread these through the transcriber constructor; default to the `base` model and document supported variants inline.
-- [x] Provide async-friendly wrappers by adding `async def transcribe_audio(self, audio_path: Path) -> dict` that offloads `transcribe_file` onto a thread executor using `asyncio.get_running_loop().run_in_executor(None, self.transcribe_file, audio_path)` to keep the event loop responsive.
-- [x] Ensure transcription responses are normalized into a structured payload (e.g., `{"text": text, "segments": segments, "language": detected_language}`) and include error handling that wraps exceptions in domain-specific `TranscriptionError` types logged at WARNING level.
-- [x] Wire the new transcriber into the orchestrator or worker entry point (e.g., `src/whisper_input_mac/orchestrator.py` or similar) by instantiating it with config values and invoking `await transcriber.transcribe_audio(temp_audio_path)` when jobs arrive.
-- [x] Implement weight prefetch tooling: add a CLI helper `poetry run python -m whisper_input_mac.tools.prefetch_models --model base --cache ~/...` that instantiates the transcriber once to force downloads, and document usage in developer notes.
-- [x] Add unit tests under `tests/transcription/test_lightning_whisper_mlx.py` that monkeypatch `LightningWhisperMLX` to avoid real downloads and assert lazy loading, cache path creation, and structured outputs; include an async test verifying executor usage.
-- [x] Run `poetry run pytest tests/transcription/test_lightning_whisper_mlx.py` and the broader suite to verify integration; fix any new lint or typing issues surfaced by project tooling.
+- [x] Verify `pyproject.toml` still declares `pyobjc-core`, `pyobjc-framework-Cocoa`, `pyobjc-framework-ApplicationServices`, and `pyobjc-framework-Quartz`; if any are missing or pinned incorrectly for local macOS, run `poetry add ...` and `poetry install` to ensure `CGEvent` and `NSPasteboard` bindings import cleanly.
+- [x] Add a new module `src/whisper_input_mac/text_injector.py` with a `TextInjectionError` exception, a `KeyboardInjector` class encapsulating CGEvent logic, and a `ClipboardFallback` helper; export a top-level `TextInjector` façade that coordinates both paths.
+- [x] Inside `KeyboardInjector`, implement `ensure_trusted_access()` that calls `Quartz.AXIsProcessTrustedWithOptions` mirroring the focus observer pattern; raise `TextInjectionError` when trust is missing so the orchestrator can degrade gracefully.
+- [x] Implement `KeyboardInjector.send_unicode(text: str)` by creating a single key-down/keyup pair via `Quartz.CGEventCreateKeyboardEvent`, invoke `Quartz.CGEventKeyboardSetUnicodeString`, and post to `kCGHIDEventTap`; guard against empty strings and wrap PyObjC errors to add context.
+- [x] Flesh out `ClipboardFallback.paste_text(text: str)` to write the text to `NSPasteboard`, issue a Command+V pair via `CGEventCreateKeyboardEvent`, and optionally restore the previous clipboard contents; log whether the fallback succeeded or if accessibility prevented the keystroke.
+- [x] Extend `TextInjector.send_text(text, prefer_clipboard: bool = False)` to try keystroke injection first when trusted, fall back to clipboard on exceptions, and surface a boolean/report for the orchestrator to emit success or error callbacks.
+- [x] Update `src/whisper_input_mac/orchestrator.py` to instantiate `TextInjector`, replace `_paste_to_clipboard` usage with the new API, and emit structured success/error events so downstream components can display notifications when injection fails.
+- [x] Add unit tests under `tests/text_injection/test_text_injector.py` that monkeypatch Quartz/Cocoa symbols to validate the control flow for trusted/untrusted states, keystroke exceptions, and clipboard fallback; run `poetry run pytest tests/text_injection/test_text_injector.py`.
+- [x] Create a manual verification script `src/whisper_input_mac/tools/debug_injection.py` that calls `TextInjector.send_text("Hello from Whisper Input")` while a text field is focused; document the expected accessibility prompts and fallback behavior in `docs/manual-testing.md`.
