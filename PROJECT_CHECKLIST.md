@@ -1,6 +1,6 @@
 ## Menu Bar UI
 - [x] Scaffold Poetry-managed macOS app entry point with `NSStatusBar` status item.
-- [ ] Implement custom status icon rendering with idle, recording, and spinner states.
+- [x] Implement custom status icon rendering with idle, recording, and spinner states.
 - [ ] Wire press-and-hold detection and optional global hotkey registration.
 
 ## Audio Capture Service

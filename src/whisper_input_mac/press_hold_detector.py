@@ -44,11 +44,21 @@ class PressHoldDetector:
     def stop(self):
         """Stop monitoring for mouse events."""
         if self._monitor_down is not None:
-            NSEvent.removeMonitor_(self._monitor_down)
-            self._monitor_down = None
+            monitor = self._monitor_down
+            try:
+                NSEvent.removeMonitor_(monitor)
+            except (ValueError, AttributeError, TypeError) as exc:
+                logger.debug("Failed to remove down monitor cleanly: %s", exc)
+            finally:
+                self._monitor_down = None
         if self._monitor_up is not None:
-            NSEvent.removeMonitor_(self._monitor_up)
-            self._monitor_up = None
+            monitor = self._monitor_up
+            try:
+                NSEvent.removeMonitor_(monitor)
+            except (ValueError, AttributeError, TypeError) as exc:
+                logger.debug("Failed to remove up monitor cleanly: %s", exc)
+            finally:
+                self._monitor_up = None
         logger.debug("PressHoldDetector stopped")
 
     def _handle_mouse_down(self, event):

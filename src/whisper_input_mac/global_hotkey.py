@@ -25,6 +25,8 @@ class GlobalHotkey:
         self._event_handler_ref = None
         if not HAS_CARBON:
             logger.warning("Carbon framework not available; hotkey support disabled")
+        else:
+            self._install_event_handler()
 
     def register(
         self,
@@ -106,6 +108,50 @@ class GlobalHotkey:
             logger.error(f"Failed to unregister hotkey {hotkey_id}: {e}")
             return False
 
+    def _install_event_handler(self):
+        """Install an event handler to listen for hotkey events."""
+        if not HAS_CARBON:
+            return
+
+        try:
+            def hotkey_handler(next_handler, event_ref, user_data):
+                """Callback for when a hotkey is pressed."""
+                try:
+                    # Extract the hotkey ID from the event
+                    hotkey_id_struct = HIToolbox.EventHotKeyID()
+                    HIToolbox.GetEventParameter(
+                        event_ref,
+                        HIToolbox.kEventParamDirectObject,
+                        HIToolbox.typeEventHotKeyID,
+                        None,
+                        hotkey_id_struct,
+                    )
+
+                    # Find matching callback
+                    for hotkey_id, ref_info in self.hotkey_refs.items():
+                        if ref_info.get("id") and hotkey_id_struct.id == ref_info["id"].id:
+                            callback = ref_info.get("callback")
+                            if callback:
+                                self._dispatch_on_loop(callback)
+                            break
+                except Exception as e:
+                    logger.error(f"Error in hotkey handler: {e}")
+
+                # Call next handler in chain
+                return HIToolbox.CallNextEventHandler(next_handler, event_ref)
+
+            # Install the event handler for hotkey events
+            self._event_handler_ref = HIToolbox.InstallEventHandler(
+                HIToolbox.GetEventDispatcherTarget(),
+                hotkey_handler,
+                (HIToolbox.kEventClassKeyboard, HIToolbox.kEventHotKeyPressed),
+                None,
+                None,
+            )
+            logger.debug("Event handler installed for hotkey events")
+        except Exception as e:
+            logger.error(f"Failed to install event handler: {e}")
+
     def _dispatch_on_loop(self, callback: Callable):
         """Dispatch callback on the asyncio event loop."""
         try:
@@ -119,10 +165,20 @@ class GlobalHotkey:
         loop.call_soon_threadsafe(callback)
 
     def cleanup(self):
-        """Unregister all hotkeys."""
+        """Unregister all hotkeys and remove event handler."""
         hotkey_ids = list(self.hotkey_refs.keys())
         for hotkey_id in hotkey_ids:
             self.unregister(hotkey_id)
+
+        # Remove event handler
+        if HAS_CARBON and self._event_handler_ref is not None:
+            try:
+                HIToolbox.RemoveEventHandler(self._event_handler_ref)
+                self._event_handler_ref = None
+                logger.debug("Event handler removed")
+            except Exception as e:
+                logger.error(f"Failed to remove event handler: {e}")
+
         logger.debug("Hotkey cleanup completed")
 
     def __del__(self):
