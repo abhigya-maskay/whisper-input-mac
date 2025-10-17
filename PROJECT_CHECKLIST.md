@@ -14,7 +14,7 @@
 - [x] Emit structured success or error messages back to the orchestrator.
 
 ## Focus-Aware Text Injector
-- [ ] Access the focused UI element using Accessibility (`AXUIElement`) APIs.
+- [x] Access the focused UI element using Accessibility (`AXUIElement`) APIs.
 - [ ] Implement keystroke injection via `CGEvent` with fallback to clipboard paste.
 - [ ] Provide completion or error callbacks for orchestrator handling.
 
