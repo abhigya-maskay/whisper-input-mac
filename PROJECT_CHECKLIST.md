@@ -4,9 +4,9 @@
 - [ ] Wire press-and-hold detection and optional global hotkey registration.
 
 ## Audio Capture Service
-- [ ] Initialize `AVAudioEngine` session via `PyObjC`, configuring microphone input and permissions.
-- [ ] Implement press-triggered PCM recording to a temporary file with error monitoring.
-- [ ] Finalize recording on release and publish completion events.
+- [x] Initialize `AVAudioEngine` session via `PyObjC`, configuring microphone input and permissions.
+- [x] Implement press-triggered PCM recording to a temporary file with error monitoring.
+- [x] Finalize recording on release and publish completion events.
 
 ## Transcription Pipeline
 - [ ] Integrate Lightning Whisper MLX, including dependency installation, weight caching, and configuration exposure.

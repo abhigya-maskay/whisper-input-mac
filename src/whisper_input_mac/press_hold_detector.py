@@ -65,8 +65,7 @@ class PressHoldDetector:
         """Handle mouse down event."""
         if self._is_button_clicked(event):
             self._is_pressed = True
-            if self.on_press_start:
-                self.on_press_start()
+            self._invoke_callback(self.on_press_start)
             
             try:
                 loop = asyncio.get_running_loop()
@@ -86,8 +85,7 @@ class PressHoldDetector:
                 self._hold_task.cancel()
                 self._hold_task = None
             
-            if self.on_press_end:
-                self.on_press_end()
+            self._invoke_callback(self.on_press_end)
         
         return event
 
@@ -112,12 +110,27 @@ class PressHoldDetector:
         
         return False
 
+    def _invoke_callback(self, callback: Optional[Callable]) -> None:
+        """
+        Invoke a callback, using loop.call_soon_threadsafe if a loop is running.
+        
+        Args:
+            callback: The callback to invoke, or None
+        """
+        if not callback:
+            return
+        
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(callback)
+        except RuntimeError:
+            callback()
+
     async def _fire_hold(self):
         """Wait for hold threshold and fire callback if not cancelled."""
         try:
             await asyncio.sleep(self.hold_threshold)
-            if self.on_hold_threshold:
-                self.on_hold_threshold()
+            self._invoke_callback(self.on_hold_threshold)
             logger.debug("Hold threshold reached")
         except asyncio.CancelledError:
             logger.debug("Hold cancelled (tap detected)")

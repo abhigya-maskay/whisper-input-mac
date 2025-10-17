@@ -6,6 +6,7 @@
   Use `NSEvent.addLocalMonitorForEventsMatchingMask_handler_` for both down and up masks, schedule an `asyncio.create_task(asyncio.sleep(hold_threshold))` to fire the hold callback, and ensure cancellation on quick releases.
 - [x] Expose three callbacks on `PressHoldDetector`—`on_press_start`, `on_hold_threshold`, and `on_press_end`—and ensure they dispatch via the running asyncio loop (falling back to synchronous invocation when no loop is active).
   Include robust cleanup in `stop()` and `__del__` to remove monitors safely, logging any failures for diagnostics.
+  Guidance: wrap callback invocations in a helper that uses `loop.call_soon_threadsafe` when a loop is running, otherwise call the callback synchronously.
 - [x] Instantiate `PressHoldDetector` inside `StatusIconController._setup_press_hold_detector` with a default hold threshold of ~350ms and wire callbacks to enqueue lifecycle messages on an internal `asyncio.Queue` (`press_events`).
   Ensure `press_events` lazily initializes the queue, that each lifecycle event is a dict like `{"type": "press_started"}`, and that queue operations are awaited using `asyncio.create_task` to avoid blocking the main thread.
 - [x] Update `StatusIconController.enter_recording()` and `exit_recording()` to react to hold and release events respectively, transitioning icons via existing debounce helpers and logging at INFO level.
