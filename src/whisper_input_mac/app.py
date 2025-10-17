@@ -9,6 +9,8 @@ from Cocoa import (
 from .audio_capture_service import AudioCaptureService
 from .status_icon_controller import StatusIconController
 from .orchestrator import TranscriptionOrchestrator
+from .preferences import PreferencesStore
+from .permissions import PermissionsCoordinator
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -60,11 +62,31 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    # Initialize preferences store
+    preferences_store = PreferencesStore()
+    logger.info("Preferences store initialized")
+
+    # Initialize permissions coordinator (before icon controller so we can pass it)
+    permissions_coordinator = PermissionsCoordinator(
+        preferences_store=preferences_store,
+        on_state_change=None,  # Will be set after icon_controller is created
+    )
+    logger.info("Permissions coordinator initialized")
+
     # Initialize status icon controller
     icon_controller = StatusIconController(
         enable_press_hold=enable_press_hold,
         enable_hotkey=enable_hotkey,
+        preferences_store=preferences_store,
+        permissions_coordinator=permissions_coordinator,
     )
+
+    # Wire up permission state change callback to update UI
+    def on_permission_state_change(status):
+        logger.info(f"Permission state changed: {status.to_dict()}")
+        icon_controller.update_permission_display(status)
+
+    permissions_coordinator.on_state_change = on_permission_state_change
 
     # Initialize audio capture service
     audio_service = AudioCaptureService(
@@ -75,7 +97,12 @@ def main():
     )
 
     # Initialize orchestrator
-    orchestrator = TranscriptionOrchestrator(audio_service, icon_controller)
+    orchestrator = TranscriptionOrchestrator(
+        audio_service=audio_service,
+        icon_controller=icon_controller,
+        permissions_coordinator=permissions_coordinator,
+        preferences_store=preferences_store,
+    )
 
     # Check permissions at startup
     loop.run_until_complete(orchestrator.startup_permissions_check())

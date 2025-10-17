@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Microphone access for audio recording -->
+    <key>com.apple.security.device.microphone</key>
+    <true/>
+
+    <!-- Input monitoring for global hotkeys and keyboard events -->
+    <key>com.apple.security.device.input-monitoring</key>
+    <true/>
+
+    <!-- Note: Accessibility permissions are granted via System Preferences/Settings
+         and do not require an entitlement. They are managed through TCC
+         (Transparency, Consent, and Control) at runtime. -->
+</dict>
+</plist>

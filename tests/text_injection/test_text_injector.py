@@ -46,28 +46,51 @@ class TestTextInjectionError:
 
 
 class TestKeyboardInjector:
-    """Tests for KeyboardInjector class."""
+    """Tests for KeyboardInjector class.
+
+    Note: ensure_trusted_access() uses exception-based error handling:
+    - Returns None (implicitly) on success
+    - Raises TextInjectionError on failure (not trusted or error)
+    """
 
     @patch("src.whisper_input_mac.text_injector.AXIsProcessTrustedWithOptions")
-    def test_ensure_trusted_access_returns_true(self, mock_is_trusted):
-        """Test ensure_trusted_access returns True when process is trusted."""
+    def test_ensure_trusted_access_succeeds_when_trusted(self, mock_is_trusted):
+        """Test ensure_trusted_access succeeds (no exception) when process is trusted."""
         mock_is_trusted.return_value = True
 
         injector = KeyboardInjector()
-        result = injector.ensure_trusted_access(prompt=True)
+        # Should not raise an exception
+        injector.ensure_trusted_access(prompt=True)
 
-        assert result is True
+        # Verify the function was called with prompt=True option
         mock_is_trusted.assert_called_once()
+        call_args = mock_is_trusted.call_args[0][0]
+        assert "AXTrustedCheckOptionPrompt" in call_args
+        assert call_args["AXTrustedCheckOptionPrompt"] is True
 
     @patch("src.whisper_input_mac.text_injector.AXIsProcessTrustedWithOptions")
-    def test_ensure_trusted_access_returns_false(self, mock_is_trusted):
-        """Test ensure_trusted_access returns False when not trusted."""
+    def test_ensure_trusted_access_raises_when_not_trusted(self, mock_is_trusted):
+        """Test ensure_trusted_access raises TextInjectionError when not trusted."""
         mock_is_trusted.return_value = False
 
         injector = KeyboardInjector()
-        result = injector.ensure_trusted_access(prompt=False)
 
-        assert result is False
+        with pytest.raises(TextInjectionError, match="Accessibility permission not granted"):
+            injector.ensure_trusted_access(prompt=False)
+
+    @patch("src.whisper_input_mac.text_injector.AXIsProcessTrustedWithOptions")
+    def test_ensure_trusted_access_with_prompt_false(self, mock_is_trusted):
+        """Test ensure_trusted_access passes prompt=False correctly."""
+        mock_is_trusted.return_value = True
+
+        injector = KeyboardInjector()
+        injector.ensure_trusted_access(prompt=False)
+
+        # Verify the function was called with prompt=False option
+        mock_is_trusted.assert_called_once()
+        call_args = mock_is_trusted.call_args[0][0]
+        assert "AXTrustedCheckOptionPrompt" in call_args
+        assert call_args["AXTrustedCheckOptionPrompt"] is False
 
     @patch("src.whisper_input_mac.text_injector.AXIsProcessTrustedWithOptions")
     def test_ensure_trusted_access_with_objc_error(self, mock_is_trusted):

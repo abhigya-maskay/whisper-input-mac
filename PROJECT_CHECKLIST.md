@@ -34,9 +34,9 @@
 - [x] Route transcription results to the text injector or surface failure feedback.
 
 ## Permissions & UX
-- [ ] Implement first-launch prompts for microphone and accessibility access with status UI.
-- [ ] Add status item menu entries for About, Preferences, and Quit.
-- [ ] Provide preference UI or CLI for language selection, autopunctuation, and hotkeys.
+- [x] Implement first-launch prompts for microphone and accessibility access with status UI.
+- [x] Add status item menu entries for About, Preferences, and Quit.
+- [x] Provide preference UI or CLI for language selection, autopunctuation, and hotkeys.
 
 ## Packaging & Deployment
 - [ ] Configure a reproducible Poetry environment and `poetry run` scripts.

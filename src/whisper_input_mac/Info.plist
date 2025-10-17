@@ -6,5 +6,11 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+
+    <!-- Permission Usage Descriptions -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Whisper Input uses your microphone to transcribe speech and convert it to text in any application.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Whisper Input needs accessibility permissions to insert transcribed text into your active application.</string>
 </dict>
 </plist>

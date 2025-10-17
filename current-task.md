@@ -1,11 +1,24 @@
-## Implementation Guide: Implement keystroke injection via `CGEvent` with clipboard fallback
+## Implementation Guide: Permissions & UX
 
-- [x] Verify `pyproject.toml` still declares `pyobjc-core`, `pyobjc-framework-Cocoa`, `pyobjc-framework-ApplicationServices`, and `pyobjc-framework-Quartz`; if any are missing or pinned incorrectly for local macOS, run `poetry add ...` and `poetry install` to ensure `CGEvent` and `NSPasteboard` bindings import cleanly.
-- [x] Add a new module `src/whisper_input_mac/text_injector.py` with a `TextInjectionError` exception, a `KeyboardInjector` class encapsulating CGEvent logic, and a `ClipboardFallback` helper; export a top-level `TextInjector` façade that coordinates both paths.
-- [x] Inside `KeyboardInjector`, implement `ensure_trusted_access()` that calls `Quartz.AXIsProcessTrustedWithOptions` mirroring the focus observer pattern; raise `TextInjectionError` when trust is missing so the orchestrator can degrade gracefully.
-- [x] Implement `KeyboardInjector.send_unicode(text: str)` by creating a single key-down/keyup pair via `Quartz.CGEventCreateKeyboardEvent`, invoke `Quartz.CGEventKeyboardSetUnicodeString`, and post to `kCGHIDEventTap`; guard against empty strings and wrap PyObjC errors to add context.
-- [x] Flesh out `ClipboardFallback.paste_text(text: str)` to write the text to `NSPasteboard`, issue a Command+V pair via `CGEventCreateKeyboardEvent`, and optionally restore the previous clipboard contents; log whether the fallback succeeded or if accessibility prevented the keystroke.
-- [x] Extend `TextInjector.send_text(text, prefer_clipboard: bool = False)` to try keystroke injection first when trusted, fall back to clipboard on exceptions, and surface a boolean/report for the orchestrator to emit success or error callbacks.
-- [x] Update `src/whisper_input_mac/orchestrator.py` to instantiate `TextInjector`, replace `_paste_to_clipboard` usage with the new API, and emit structured success/error events so downstream components can display notifications when injection fails.
-- [x] Add unit tests under `tests/text_injection/test_text_injector.py` that monkeypatch Quartz/Cocoa symbols to validate the control flow for trusted/untrusted states, keystroke exceptions, and clipboard fallback; run `poetry run pytest tests/text_injection/test_text_injector.py`.
-- [x] Create a manual verification script `src/whisper_input_mac/tools/debug_injection.py` that calls `TextInjector.send_text("Hello from Whisper Input")` while a text field is focused; document the expected accessibility prompts and fallback behavior in `docs/manual-testing.md`.
+- [ ] Step 1 — Prepare permission copy and entitlements
+  - Confirm `Info.plist` contains `NSMicrophoneUsageDescription` and accessibility usage strings that match the menu bar icon branding; draft final copy and add localization stubs if the app already supports multiple languages.
+  - Review `src/whisper_input_mac/app.py` (or the menu bar bootstrap module) to ensure the bundle identifier matches any existing developer certificates; update the `.entitlements` file with `com.apple.security.device.microphone` and accessibility usage entries.
+- [ ] Step 2 — Implement a permissions coordinator service
+  - Create `src/whisper_input_mac/permissions.py` with an async `PermissionsCoordinator` that wraps `AVAudioSession.sharedInstance().requestRecordPermission_` and `Quartz.AXIsProcessTrustedWithOptions`.
+  - Persist the last-seen permission states in `Preferences` (planned in Step 6) so first-launch messaging can surface “pending” vs “granted/denied”.
+  - Expose callbacks/events that let the orchestrator update the status item tooltip and icon while the user responds to dialogs.
+- [ ] Step 3 — Gate recording/injection behind permission checks
+  - Update the event orchestrator to await `PermissionsCoordinator.ensure_ready()` before arming the audio engine; short-circuit press events with a UX message when microphone access is denied.
+  - On accessibility denial, surface a dialog with a “Open System Settings → Accessibility” button and log a structured error so the UI can show a red badge on the status icon.
+- [ ] Step 4 — Add status item menu entries
+  - Extend the menu bar controller to add `About Whisper Input`, `Preferences…`, and `Quit` menu items; route to Cocoa `NSApplication.sharedApplication().terminate_(None)` for quit.
+  - Implement the `About` panel using `NSAlert` or an `NSPanel` that displays version/build info from `pyproject.toml`.
+  - Include a disabled/secondary label that reflects current permission status (e.g., “Accessibility: Needs access”) using the coordinator state.
+- [ ] Step 5 — Build the Preferences surface
+  - Introduce a minimalist `PreferencesWindowController` (Cocoa) or a CLI subcommand `poetry run whisper-input prefs` if GUI work is deferred; ensure both eventually write to a shared `preferences.json`.
+  - Allow editing of language, autopunctuation toggle, and hotkey (modifier + key); validate hotkey conflicts and push updates back into the orchestrator/global hotkey registrar.
+- [ ] Step 6 — Implement preference persistence and schema validation
+  - Add `src/whisper_input_mac/preferences.py` with a `PreferencesStore` that loads/saves JSON (seeded with defaults) and performs schema validation via `pydantic` or manual checks.
+  - Wire the store into the orchestrator, transcription worker, and hotkey module so updates propagate without restarting the app; emit change events for UI refresh.
+- [ ] Step 7 — Automated testing coverage
+  - Write unit tests that monkeypatch PyObjC APIs to simulate granted/denied states for microphone and accessibility flows.

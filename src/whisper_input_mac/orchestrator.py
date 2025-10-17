@@ -9,6 +9,8 @@ from .status_icon_controller import StatusIconController, IconState
 from .transcription import LightningWhisperTranscriber, TranscriptionConfig, TranscriptionError
 from .accessibility import FocusObserver, wait_for_trusted_access, AccessibilityPermissionError
 from .text_injector import TextInjector
+from .permissions import PermissionsCoordinator, PermissionState
+from .preferences import PreferencesStore, PreferenceKey
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,8 @@ class TranscriptionOrchestrator:
         self,
         audio_service: AudioCaptureService,
         icon_controller: StatusIconController,
+        permissions_coordinator: Optional[PermissionsCoordinator] = None,
+        preferences_store: Optional[PreferencesStore] = None,
         transcriber: Optional[LightningWhisperTranscriber] = None,
     ):
         """
@@ -28,13 +32,27 @@ class TranscriptionOrchestrator:
         Args:
             audio_service: AudioCaptureService instance for recording
             icon_controller: StatusIconController for UI updates
+            permissions_coordinator: PermissionsCoordinator instance (optional)
+            preferences_store: PreferencesStore instance (optional)
             transcriber: LightningWhisperTranscriber instance (created if not provided)
         """
         self.audio_service = audio_service
         self.icon_controller = icon_controller
-        self.transcriber = transcriber or LightningWhisperTranscriber()
+        self.permissions_coordinator = permissions_coordinator
+        self.preferences_store = preferences_store
         self._current_session_id: Optional[str] = None
         self._is_processing = False
+
+        # Create transcriber with config from preferences
+        if transcriber:
+            self.transcriber = transcriber
+        else:
+            config = self._create_transcription_config()
+            self.transcriber = LightningWhisperTranscriber(config=config)
+
+        # Register preference change listener to reload transcriber when language changes
+        if self.preferences_store:
+            self.preferences_store.add_change_listener(self._on_preference_changed)
 
         # Queue for emitting injection events to downstream components
         self.injection_events: asyncio.Queue = asyncio.Queue()
@@ -63,6 +81,20 @@ class TranscriptionOrchestrator:
         prompting the user to grant them if needed.
         """
         logger.info("Checking permissions at startup...")
+
+        # Use PermissionsCoordinator if available
+        if self.permissions_coordinator:
+            try:
+                await self.permissions_coordinator.ensure_ready(show_dialogs=True)
+                logger.info("All permissions granted via PermissionsCoordinator")
+            except PermissionError as e:
+                logger.warning(f"Permission check failed: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected error during permission check: {e}")
+            return
+
+        # Fallback to legacy permission checking
+        logger.warning("PermissionsCoordinator not available, using legacy permission checks")
 
         # Check microphone permission
         try:
@@ -151,7 +183,24 @@ class TranscriptionOrchestrator:
         logger.info(f"Starting recording session: {self._current_session_id}")
 
         try:
-            await self.audio_service.ensure_microphone_permission()
+            # Check permissions before recording
+            if self.permissions_coordinator:
+                # Use PermissionsCoordinator to gate recording
+                try:
+                    await self.permissions_coordinator.ensure_ready(show_dialogs=False)
+                    logger.debug("Permissions verified, starting recording")
+                except PermissionError as e:
+                    logger.error(f"Permission denied: {e}")
+                    self.icon_controller.set_idle()
+
+                    # Show user-facing error dialog
+                    self.icon_controller.show_permission_error(str(e))
+                    return
+            else:
+                # Fallback to legacy permission check
+                await self.audio_service.ensure_microphone_permission()
+
+            # Start recording
             self.audio_service.start_recording(self._current_session_id)
         except Exception as e:
             logger.error(f"Failed to start recording: {e}")
@@ -187,6 +236,9 @@ class TranscriptionOrchestrator:
             # Extract text
             transcribed_text = result.get("text", "")
             logger.info(f"Transcription complete: {len(transcribed_text)} characters")
+
+            # Apply auto-punctuation if enabled
+            transcribed_text = self._apply_auto_punctuation(transcribed_text)
 
             # Log focused element metadata for debugging
             if self.focus_observer:
@@ -259,8 +311,103 @@ class TranscriptionOrchestrator:
             self._is_processing = False
 
 
+    def _on_preference_changed(self, key: PreferenceKey, new_value) -> None:
+        """
+        Handle preference changes.
+
+        Args:
+            key: The preference key that changed
+            new_value: The new value
+        """
+        # Reload transcriber when language changes
+        if key == PreferenceKey.LANGUAGE:
+            logger.info(f"Language preference changed to: {new_value}, reloading transcriber")
+            self.reload_transcriber()
+        # Auto-punctuation changes don't require transcriber reload
+        elif key == PreferenceKey.AUTO_PUNCTUATION:
+            logger.info(f"Auto-punctuation preference changed to: {new_value}")
+
+    def _create_transcription_config(self) -> TranscriptionConfig:
+        """
+        Create transcription config from preferences.
+
+        Returns:
+            TranscriptionConfig instance with settings from PreferencesStore
+        """
+        config = TranscriptionConfig()
+
+        # Read language preference
+        if self.preferences_store:
+            try:
+                language = self.preferences_store.get(PreferenceKey.LANGUAGE)
+                config.language = language if language != "en" else None  # None = auto-detect
+                logger.debug(f"Using language from preferences: {language}")
+            except Exception as e:
+                logger.warning(f"Failed to read language preference: {e}")
+
+        return config
+
+    def reload_transcriber(self) -> None:
+        """
+        Reload the transcriber with updated configuration from preferences.
+
+        This should be called when language or other transcription preferences change.
+        """
+        try:
+            # Shutdown old transcriber
+            if self.transcriber:
+                self.transcriber.shutdown()
+
+            # Create new transcriber with updated config
+            config = self._create_transcription_config()
+            self.transcriber = LightningWhisperTranscriber(config=config)
+            logger.info("Transcriber reloaded with updated preferences")
+        except Exception as e:
+            logger.error(f"Failed to reload transcriber: {e}")
+
+    def _apply_auto_punctuation(self, text: str) -> str:
+        """
+        Apply automatic punctuation to transcribed text.
+
+        Args:
+            text: Raw transcribed text
+
+        Returns:
+            Text with auto-punctuation applied
+        """
+        if not text:
+            return text
+
+        # Check if auto-punctuation is enabled
+        if self.preferences_store:
+            try:
+                auto_punct = self.preferences_store.get(PreferenceKey.AUTO_PUNCTUATION)
+                if not auto_punct:
+                    return text
+            except Exception as e:
+                logger.warning(f"Failed to read auto-punctuation preference: {e}")
+                return text
+
+        # Basic auto-punctuation rules
+        processed = text.strip()
+
+        # Capitalize first letter
+        if processed:
+            processed = processed[0].upper() + processed[1:]
+
+        # Add period at end if no punctuation exists
+        if processed and processed[-1] not in '.!?':
+            processed += '.'
+
+        logger.debug(f"Applied auto-punctuation: '{text}' -> '{processed}'")
+        return processed
+
     def shutdown(self):
         """Clean up resources."""
+        # Remove preference change listener
+        if self.preferences_store:
+            self.preferences_store.remove_change_listener(self._on_preference_changed)
+
         if self._current_session_id:
             self.audio_service.cancel_recording()
         self.transcriber.shutdown()

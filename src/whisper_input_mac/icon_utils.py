@@ -81,3 +81,46 @@ def create_busy_icon(size: float = 18.0) -> NSImage:
     image.setTemplate_(True)
     logger.debug("Created busy icon")
     return image
+
+
+def add_warning_badge(icon: NSImage, size: float = 18.0) -> NSImage:
+    """
+    Add a red warning badge to an icon.
+
+    Args:
+        icon: Base icon to add badge to
+        size: Size of the icon (default 18.0)
+
+    Returns:
+        New NSImage with red badge overlay
+    """
+    # Create a new image for the composite
+    badged_image = NSImage.alloc().initWithSize_(NSSize(size, size))
+    badged_image.lockFocus()
+
+    # Draw the original icon
+    icon.drawInRect_fromRect_operation_fraction_(
+        ((0, 0), (size, size)),
+        ((0, 0), icon.size()),
+        2,  # NSCompositeSourceOver
+        1.0
+    )
+
+    # Draw red badge in top-right corner
+    badge_size = size * 0.35
+    badge_x = size - badge_size - 1
+    badge_y = size - badge_size - 1
+    badge_rect = ((badge_x, badge_y), (badge_size, badge_size))
+
+    # Red fill
+    NSColor.colorWithRed_green_blue_alpha_(0.9, 0.2, 0.2, 1.0).setFill()
+    badge = NSBezierPath.bezierPathWithOvalInRect_(badge_rect)
+    badge.fill()
+
+    # Optional: Add exclamation mark in badge
+    # For now, just a solid red dot is clear enough
+
+    badged_image.unlockFocus()
+    # Note: We don't set as template because the red badge needs color
+    logger.debug("Added warning badge to icon")
+    return badged_image
