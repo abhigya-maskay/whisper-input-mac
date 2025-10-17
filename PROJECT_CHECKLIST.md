@@ -15,8 +15,8 @@
 
 ## Focus-Aware Text Injector
 - [x] Access the focused UI element using Accessibility (`AXUIElement`) APIs.
-- [ ] Implement keystroke injection via `CGEvent` with fallback to clipboard paste.
-- [ ] Provide completion or error callbacks for orchestrator handling.
+- [x] Implement keystroke injection via `CGEvent` with fallback to clipboard paste.
+- [x] Provide completion or error callbacks for orchestrator handling.
 
 ## Event Orchestrator
 - [x] Establish a central `asyncio` loop coordinating UI, audio, transcription, and injection events.
@@ -31,7 +31,7 @@
 ## Data Flow Integration
 - [x] Connect press events to start the audio service and track session metadata.
 - [x] Chain release events to enqueue temporary audio files for transcription.
-- [ ] Route transcription results to the text injector or surface failure feedback.
+- [x] Route transcription results to the text injector or surface failure feedback.
 
 ## Permissions & UX
 - [ ] Implement first-launch prompts for microphone and accessibility access with status UI.
