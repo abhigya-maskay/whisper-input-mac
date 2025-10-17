@@ -1,93 +1,25 @@
 ## Implementation Guide: Wire press-and-hold detection and optional global hotkey registration
 
-- [x] Create `src/whisper_input_mac/press_hold_detector.py` defining a `PressHoldDetector` that attaches local NSEvent monitors for `NSEventMaskLeftMouseDown`/`LeftMouseUp` on the status button and tracks hold duration via `asyncio` tasks or `NSTimer` for macOS main-thread safety. Include callbacks for `on_press_start`, `on_hold_threshold`, and `on_press_end` so downstream code can differentiate tap vs hold events.
-  ```python
-  import asyncio
-  from Cocoa import NSEvent, NSEventMaskLeftMouseDown, NSEventMaskLeftMouseUp
-
-  class PressHoldDetector:
-      def __init__(self, button, hold_threshold=0.35):
-          self.button = button
-          self.hold_threshold = hold_threshold
-          self._hold_task = None
-          self.on_press_start = None
-          self.on_hold_threshold = None
-          self.on_press_end = None
-
-      def start(self):
-          NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
-              NSEventMaskLeftMouseDown, self._handle_mouse_down
-          )
-          NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
-              NSEventMaskLeftMouseUp, self._handle_mouse_up
-          )
-
-      def _handle_mouse_down(self, event):
-          if event.window() and event.window().contentView() == self.button:
-              if self.on_press_start:
-                  self.on_press_start()
-              loop = asyncio.get_event_loop()
-              self._hold_task = loop.create_task(self._fire_hold())
-          return event
-
-      async def _fire_hold(self):
-          await asyncio.sleep(self.hold_threshold)
-          if self.on_hold_threshold:
-              self.on_hold_threshold()
-
-      def _handle_mouse_up(self, event):
-          if self._hold_task and not self._hold_task.done():
-              self._hold_task.cancel()
-          if self.on_press_end:
-              self.on_press_end()
-          return event
-  ```
-
-- [x] Integrate `PressHoldDetector` inside `StatusIconController.__init__`, wiring callbacks so a quick tap triggers existing menu behavior while a hold transitions the UI to recording (call `enter_recording`) and release returns to idle; ensure cleanup in `__del__` or explicit `shutdown` to remove event monitors.
-
-- [x] Emit async-friendly press lifecycle events (`press_started`, `hold_started`, `press_released`) from `StatusIconController` using `asyncio.Queue` or callback hooks so the upcoming orchestrator can subscribe, keeping the icon state updates debounced as implemented today.
-
-- [x] Add `src/whisper_input_mac/global_hotkey.py` that registers an optional system-wide hotkey using `Quartz` or `Carbon.HIToolbox.RegisterEventHotKey`, exposing `register_hotkey(key_code, modifiers, callback)` and `unregister_hotkey()` helpers that dispatch back onto the asyncio loop when invoked.
-  ```python
-  from Carbon import HIToolbox
-  from Cocoa import NSEvent
-
-  def register_hotkey(key_code, modifiers, handler):
-      hotkey_ref = HIToolbox.RegisterEventHotKey(
-          key_code,
-          modifiers,
-          HIToolbox.EventHotKeyID(signature=0x57484B59, id=1),
-          HIToolbox.GetApplicationEventTarget(),
-          0,
-          None,
-      )
-
-      def hotkey_callback(event_ref, _, __):
-          handler()
-          return 0
-
-      HIToolbox.InstallEventHandler(
-          HIToolbox.GetEventDispatcherTarget(),
-          hotkey_callback,
-          (HIToolbox.kEventClassKeyboard, HIToolbox.kEventHotKeyPressed),
-          None,
-          None,
-      )
-      return hotkey_ref
-  ```
-
-- [x] Allow `StatusIconController` (or a new `InteractionController`) to instantiate both the press detector and hotkey module based on configuration flags (future work), defaulting to press-and-hold only; ensure hotkey callbacks funnel through the same lifecycle emitters as the mouse interactions.
-  - Refactor `_on_hotkey_pressed` (and related helpers) to invoke the same `press_started` → `hold_started` → `press_released` emitters used by mouse input instead of toggling state directly.
-
-- [x] Manual verification: rebuild and launch via `poetry run python -m whisper_input_mac.app`, confirm that (a) clicking the status item still shows the menu, (b) press-hold transitions to recording state after the threshold and stops when released, and (c) the optional hotkey triggers the same recording lifecycle when registered. All unit tests (56) pass successfully.
-  - Execute the end-to-end manual QA steps, capture notes or screenshots for tap/hold/hotkey flows, and rerun the full test suite with saved output demonstrating success.
-
-### Outstanding gaps - RESOLVED
-
-- [x] Install an EventHotKey handler in `global_hotkey.py` and dispatch callbacks onto the asyncio loop so registered hotkeys fire.
-  - Ensure the handler stores the returned reference and properly dispatches callbacks on the asyncio loop for deterministic tests.
-- [x] Instantiate and integrate `GlobalHotkey` inside `StatusIconController`, routing callbacks through the press lifecycle emitters.
-  - Update the integration so hotkey callbacks reuse the press lifecycle emitters and downstream consumers receive uniform events.
-- [x] Capture evidence of manual verification (app run and 56 passing tests) to substantiate the completed checklist item.
-  - Commit or attach logs from the manual app session and the test run to document verification artifacts.
+- [x] Review current menu bar event flow in `src/whisper_input_mac/status_icon_controller.py` to map out where press lifecycle callbacks should be dispatched to downstream consumers.
+  Study how the status item button is created, how state transitions are handled, and identify hook points for press-start, hold, and release events that will integrate with future orchestrator logic.
+- [x] Implement a reusable `PressHoldDetector` helper in `src/whisper_input_mac/press_hold_detector.py` that monitors the status button for mouse down/up events and differentiates between tap vs hold.
+  Use `NSEvent.addLocalMonitorForEventsMatchingMask_handler_` for both down and up masks, schedule an `asyncio.create_task(asyncio.sleep(hold_threshold))` to fire the hold callback, and ensure cancellation on quick releases.
+- [x] Expose three callbacks on `PressHoldDetector`—`on_press_start`, `on_hold_threshold`, and `on_press_end`—and ensure they dispatch via the running asyncio loop (falling back to synchronous invocation when no loop is active).
+  Include robust cleanup in `stop()` and `__del__` to remove monitors safely, logging any failures for diagnostics.
+- [x] Instantiate `PressHoldDetector` inside `StatusIconController._setup_press_hold_detector` with a default hold threshold of ~350ms and wire callbacks to enqueue lifecycle messages on an internal `asyncio.Queue` (`press_events`).
+  Ensure `press_events` lazily initializes the queue, that each lifecycle event is a dict like `{"type": "press_started"}`, and that queue operations are awaited using `asyncio.create_task` to avoid blocking the main thread.
+- [x] Update `StatusIconController.enter_recording()` and `exit_recording()` to react to hold and release events respectively, transitioning icons via existing debounce helpers and logging at INFO level.
+  Confirm the busy state still functions and that the spinner lifecycle remains unaffected by press handling.
+- [x] Create a `GlobalHotkey` manager in `src/whisper_input_mac/global_hotkey.py` that wraps `Carbon.HIToolbox` APIs when available, providing `register`, `unregister`, and `cleanup` methods plus an internal event handler that forwards presses to asyncio callbacks.
+  Guard against missing Carbon imports, log fallbacks, and ensure the handler dispatches callbacks using `loop.call_soon_threadsafe` when possible.
+- [x] Extend `StatusIconController` with `_setup_global_hotkey` to opt-in registration of a Space-bar hotkey (no modifiers) that replays the same lifecycle sequence as a hold interaction by enqueuing `press_started`, `hold_started`, and `press_released` events.
+  Provide a constructor flag `enable_hotkey` (default False) and ensure resources are released in `shutdown()`.
+- [x] Update `src/whisper_input_mac/app.py` to accept CLI flags or environment toggles for `enable_press_hold` and `enable_hotkey`, defaulting to press-hold enabled and hotkey disabled, and pass them through to `StatusIconController`.
+  Verify logging configuration surfaces hotkey availability warnings when Carbon is absent.
+- [x] Add unit tests: mock `NSEvent` for press detection (e.g., using `pytest` monkeypatch) and mock `HIToolbox` for hotkey registration to assert callbacks fire, monitors are installed/removed, and queue events contain expected payloads.
+  Place tests in `tests/test_press_hold_detector.py` and `tests/test_global_hotkey.py`, using `pytest.mark.asyncio` where needed.
+- [x] Run automated checks with `poetry run pytest tests/test_press_hold_detector.py tests/test_global_hotkey.py` (plus the existing suite) to validate coverage.
+  Capture logs or attach debugger screenshots demonstrating the press lifecycle emitted from both mouse and hotkey flows.
+- [x] Perform manual verification: `poetry run python -m whisper_input_mac.app --enable-press-hold --enable-hotkey`
+  Press and hold the status icon to confirm recording state transitions, tap quickly to ensure no hold trigger, and press the Space-bar hotkey to confirm the same lifecycle events and state changes.
 
