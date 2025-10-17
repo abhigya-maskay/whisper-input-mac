@@ -1,0 +1,19 @@
+- [x] Refactor `src/whisper_input_mac/app.py` to centralize status icon state management:
+  - [x] Introduce an `IconState` `Enum` (idle, recording, busy) and a controller class that owns the `NSStatusItem`.
+  - [x] Move menu creation and status button setup into methods on the controller for easier state transitions.
+  - [x] Ensure the controller exposes `set_state(state: IconState)` that updates both the icon and its tooltip, keeping the button reference alive on the class.
+- [x] Implement vector-based icon generation using `NSImage` so assets render crisply in light/dark modes:
+  - [x] Create a helper that draws into an `NSImage` using `NSBezierPath`—e.g. a circle with mic glyph for idle, a solid waveform block for recording, and a stroked ring for busy.
+  - [x] Mark generated images as templates (`setTemplate_(True)`) so the system tints them automatically for dark mode.
+  - [x] Cache the three `NSImage` instances on the controller to avoid redrawing every state change.
+- [x] Add animated spinner support for the busy state to convey transcription in progress:
+  - [x] Use `NSProgressIndicator` in indeterminate mode embedded into a custom `NSView` assigned to the status button’s `subviews`.
+  - [x] Start/stop the spinner when entering/leaving the busy state while restoring the static icon when idle/recording.
+  - [x] Throttle high-frequency state transitions by debouncing updates (e.g., with `asyncio.create_task` and `asyncio.sleep(0.1)`) to prevent flicker.
+- [x] Expose state-change hooks for downstream services:
+  - [x] Provide `enter_recording()` / `exit_recording()` helpers that orchestrator code can call; wire them to `set_state`.
+  - [x] Emit debug logs (via `logging`) on state transitions to help future troubleshooting without spamming production.
+- [x] Manually verify icon behavior on macOS:
+  - [x] Run `poetry run python -m whisper_input_mac.app` and confirm each state change updates title, tooltip, and spinner.
+  - [x] Test light/dark appearance toggles (System Settings → Appearance) to verify template icons adapt.
+  - [x] Document any quirks observed for later automation and capture screenshots if necessary for visual regression notes.

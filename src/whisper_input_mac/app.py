@@ -1,32 +1,25 @@
+import logging
 from Cocoa import (
-    NSApp,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
-    NSStatusBar,
-    NSVariableStatusItemLength,
-    NSMenu,
-    NSMenuItem,
 )
 
+from .status_icon_controller import StatusIconController
 
-def build_menu(status_item):
-    menu = NSMenu.alloc().init()
-    quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-        "Quit Whisper Input", "terminate:", "q"
-    )
-    menu.addItem_(quit_item)
-    status_item.setMenu_(menu)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def main():
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-    status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
-        NSVariableStatusItemLength
-    )
-    status_item.button().setTitle_("🎙")
-    build_menu(status_item)
+    # Initialize status icon controller
+    icon_controller = StatusIconController()
+    logger.info("Whisper Input app started")
 
     app.run()
 
