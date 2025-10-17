@@ -15,6 +15,7 @@ from Cocoa import (
 
 from .icon_utils import create_idle_icon, create_recording_icon, create_busy_icon
 from .press_hold_detector import PressHoldDetector
+from .global_hotkey import GlobalHotkey
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,19 @@ class StatusIconController:
         self._enable_press_hold = enable_press_hold
         self._enable_hotkey = enable_hotkey
 
+        # Global hotkey
+        self._global_hotkey: Optional[GlobalHotkey] = None
+
         self._setup_menu()
         self._set_state_immediate(IconState.IDLE)
 
         # Start press-hold detection if enabled
         if self._enable_press_hold:
             self._setup_press_hold_detector()
+
+        # Setup global hotkey if enabled
+        if self._enable_hotkey:
+            self._setup_global_hotkey()
 
     def _setup_press_hold_detector(self):
         """Setup press-hold detection on the status button."""
@@ -80,6 +88,47 @@ class StatusIconController:
             logger.debug("Press-hold detector initialized")
         except Exception as e:
             logger.warning(f"Failed to setup press-hold detector: {e}")
+
+    def _setup_global_hotkey(self):
+        """Setup global hotkey registration."""
+        try:
+            self._global_hotkey = GlobalHotkey()
+            
+            # Register Space key as the default hotkey for recording
+            # Using Space key (49) with no modifiers
+            result = self._global_hotkey.register(
+                key_code=GlobalHotkey.SPACE,
+                modifiers=0,
+                callback=self._on_hotkey_pressed,
+                hotkey_id="recording",
+            )
+            
+            if result:
+                logger.debug("Global hotkey registered for Space key")
+            else:
+                logger.warning("Failed to register global hotkey")
+        except Exception as e:
+            logger.warning(f"Failed to setup global hotkey: {e}")
+
+    def _on_hotkey_pressed(self):
+        """Handle global hotkey press by emitting press lifecycle events."""
+        try:
+            loop = asyncio.get_running_loop()
+            # Emit press lifecycle sequence to match mouse interaction behavior
+            asyncio.create_task(self._hotkey_press_lifecycle())
+        except RuntimeError:
+            logger.warning("No running loop for hotkey_pressed event")
+
+    async def _hotkey_press_lifecycle(self):
+        """Simulate press-and-hold lifecycle for hotkey."""
+        # Emit press start
+        await self._emit_press_event("press_started")
+        
+        # Emit hold threshold to trigger recording entry
+        await self._emit_press_event("hold_started")
+        
+        # Emit press release to trigger recording exit
+        await self._emit_press_event("press_released")
 
     @property
     def press_events(self) -> asyncio.Queue:
@@ -247,6 +296,10 @@ class StatusIconController:
         if self._press_hold_detector is not None:
             self._press_hold_detector.stop()
             logger.debug("Press-hold detector stopped")
+
+        if self._global_hotkey is not None:
+            self._global_hotkey.cleanup()
+            logger.debug("Global hotkey cleaned up")
 
     @property
     def status_button(self):
