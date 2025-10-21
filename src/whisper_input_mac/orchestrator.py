@@ -159,6 +159,7 @@ class TranscriptionOrchestrator:
             event: Event dict with keys 'type', etc.
         """
         event_type = event.get("type")
+        logger.info(f"Processing press event: {event_type}")
 
         if event_type == "press_started":
             await self._on_press_started()
@@ -257,7 +258,8 @@ class TranscriptionOrchestrator:
             if transcribed_text:
                 # Inject transcribed text to active application
                 if self.text_injector:
-                    success, error_msg = self.text_injector.send_text(transcribed_text)
+                    # Use clipboard method for better compatibility (especially with terminals)
+                    success, error_msg = self.text_injector.send_text(transcribed_text, prefer_clipboard=True)
                     if success:
                         logger.info(f"Text injected successfully: {len(transcribed_text)} characters")
                         # Emit success event for downstream components

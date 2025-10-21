@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 try:
-    from Quartz import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt  # type: ignore
-    from ApplicationServices import (  # type: ignore
+    from HIServices import (  # type: ignore
+        AXIsProcessTrustedWithOptions,
+        kAXTrustedCheckOptionPrompt,
         AXUIElementCreateSystemWide,
         AXUIElementCopyAttributeValue,
         kAXFocusedUIElementAttribute,
         kAXFocusedApplicationAttribute,
-        kAXBundleIdentifierAttribute,
         kAXRoleAttribute,
         kAXSubroleAttribute,
     )
@@ -20,7 +20,7 @@ try:
 except ImportError as e:
     raise ImportError(
         f"Required PyObjC frameworks not available: {e}. "
-        "Ensure pyobjc-framework-ApplicationServices and pyobjc-framework-Quartz are installed."
+        "Ensure pyobjc-framework-ApplicationServices is installed."
     ) from e
 
 logger = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ class FocusObserver:
                 return None
 
             bundle_id = self._get_attribute(
-                focused_app, kAXBundleIdentifierAttribute
+                focused_app, "AXBundleIdentifier"
             )
             role = self._get_attribute(focused_element, kAXRoleAttribute)
             subrole = self._get_attribute(focused_element, kAXSubroleAttribute)

@@ -1,18 +1,23 @@
 """Text injection via CGEvent keystroke injection with clipboard fallback."""
 
 import logging
+import time
 from typing import Optional, Tuple
 
 try:
-    from Quartz import (  # type: ignore
+    from HIServices import (  # type: ignore
         AXIsProcessTrustedWithOptions,
         kAXTrustedCheckOptionPrompt,
+    )
+    from Quartz import (  # type: ignore
         CGEventCreateKeyboardEvent,
         CGEventKeyboardSetUnicodeString,
         CGEventPost,
+        CGEventSetFlags,
         kCGHIDEventTap,
         kCGEventKeyDown,
         kCGEventKeyUp,
+        kCGEventFlagMaskCommand,
     )
     from Cocoa import NSPasteboard, NSStringPboardType, NSString  # type: ignore
     import objc  # type: ignore
@@ -24,9 +29,6 @@ except ImportError as e:
     ) from e
 
 logger = logging.getLogger(__name__)
-
-# Virtual key code for Command key
-kVK_Command = 0x37
 
 
 class TextInjectionError(Exception):
@@ -185,22 +187,24 @@ class ClipboardFallback:
                 return True  # Partial success - clipboard is set
 
             try:
-                # Create Command key down event
-                cmd_down = CGEventCreateKeyboardEvent(None, kVK_Command, True)
-                # Create V key down event (with Command flag)
+                # Create V key events
                 v_key_code = 0x09  # Virtual key code for 'V'
                 v_down = CGEventCreateKeyboardEvent(None, v_key_code, True)
                 v_up = CGEventCreateKeyboardEvent(None, v_key_code, False)
-                # Create Command key up event
-                cmd_up = CGEventCreateKeyboardEvent(None, kVK_Command, False)
 
-                # Post events in sequence: Cmd down, V down, V up, Cmd up
-                CGEventPost(kCGHIDEventTap, cmd_down)
+                # Set Command flag on both V key events
+                CGEventSetFlags(v_down, kCGEventFlagMaskCommand)
+                CGEventSetFlags(v_up, kCGEventFlagMaskCommand)
+
+                # Post the Cmd+V events
                 CGEventPost(kCGHIDEventTap, v_down)
                 CGEventPost(kCGHIDEventTap, v_up)
-                CGEventPost(kCGHIDEventTap, cmd_up)
 
                 logger.debug("Simulated Cmd+V keystroke")
+
+                # Wait a moment for the paste to complete before restoring clipboard
+                # This ensures the application has time to read from the clipboard
+                time.sleep(0.05)  # 50ms should be enough
 
             except Exception as e:
                 logger.warning(f"Failed to simulate Cmd+V: {e}")

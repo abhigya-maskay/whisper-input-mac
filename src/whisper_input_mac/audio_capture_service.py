@@ -175,18 +175,25 @@ class AudioCaptureService:
                 raise AudioCaptureError("Failed to get audio format from input node")
 
             # Create audio file for writing
-            error_ptr = None
             file_url = NSURL.fileURLWithPath_(self._temp_file_path)
-            self._audio_file = AVAudioFile.alloc().initWithURL_commonFormat_interleaved_channelLayout_error_(
+
+            # Create settings dictionary for audio file
+            settings = {
+                'AVFormatIDKey': audio_format.settings()['AVFormatIDKey'],
+                'AVSampleRateKey': audio_format.sampleRate(),
+                'AVNumberOfChannelsKey': audio_format.channelCount(),
+            }
+
+            # Initialize audio file for writing
+            self._audio_file, error = AVAudioFile.alloc().initForWriting_settings_error_(
                 file_url,
-                AVAudioCommonFormatPCMFormatFloat32,
-                False,
-                None,
-                error_ptr,
+                settings,
+                None
             )
 
-            if self._audio_file is None:
-                raise AudioCaptureError("Failed to create audio file")
+            if self._audio_file is None or error is not None:
+                error_msg = str(error) if error else "Unknown error"
+                raise AudioCaptureError(f"Failed to create audio file: {error_msg}")
 
             # Install tap on input node
             buffer_size = 4096
@@ -194,10 +201,9 @@ class AudioCaptureService:
             input_node.installTapOnBus_bufferSize_format_block_(0, buffer_size, audio_format, tap_block)
 
             # Start engine
-            error_ptr = None
-            self._engine.startAndReturnError_(error_ptr)
+            success, error = self._engine.startAndReturnError_(None)
 
-            if self._engine.isRunning():
+            if success and self._engine.isRunning():
                 self._is_recording = True
                 logger.info(f"Recording started: session_id={session_id}, file={self._temp_file_path}")
 

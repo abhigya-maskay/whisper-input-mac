@@ -11,7 +11,17 @@ from Cocoa import (
     NSProgressIndicator,
     NSView,
     NSRect,
+    NSThread,
 )
+from Foundation import NSObject
+import objc
+
+# Import dispatch for thread-safe UI operations
+try:
+    from AppKit import NSApp
+    from PyObjCTools import AppHelper
+except ImportError:
+    pass
 
 from .icon_utils import create_idle_icon, create_recording_icon, create_busy_icon, add_warning_badge
 from .press_hold_detector import PressHoldDetector
@@ -29,6 +39,60 @@ class IconState(Enum):
     BUSY = "busy"
 
 
+class _MainThreadCallbackHelper(NSObject):
+    """Helper class for dispatching callables to the main thread."""
+
+    def initWithCallable_(self, callable_obj):
+        """Initialize with a callable object."""
+        self = objc.super(_MainThreadCallbackHelper, self).init()
+        if self is None:
+            return None
+        self.callable = callable_obj
+        self.result = None
+        self.exception = None
+        return self
+
+    @objc.python_method
+    def execute(self):
+        """Execute the callable and capture result/exception."""
+        try:
+            self.result = self.callable()
+        except Exception as e:
+            self.exception = e
+
+
+def run_on_main_thread(func):
+    """
+    Decorator to ensure a method runs on the main thread.
+
+    macOS UI operations must occur on the main thread. This decorator
+    ensures thread safety by dispatching to the main thread when needed.
+    """
+    def wrapper(self, *args, **kwargs):
+        if NSThread.isMainThread():
+            # Already on main thread, call directly
+            return func(self, *args, **kwargs)
+        else:
+            # Need to dispatch to main thread synchronously
+            # Create a closure that captures the call
+            def call():
+                return func(self, *args, **kwargs)
+
+            # Create helper and call on main thread
+            helper = _MainThreadCallbackHelper.alloc().initWithCallable_(call)
+            helper.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "execute",
+                None,
+                True  # Wait until done
+            )
+
+            if helper.exception:
+                raise helper.exception
+            return helper.result
+
+    return wrapper
+
+
 class StatusIconController:
     """Controller managing status bar icon and state transitions."""
 
@@ -38,6 +102,7 @@ class StatusIconController:
         enable_hotkey: bool = False,
         preferences_store: Optional[PreferencesStore] = None,
         permissions_coordinator: Optional[PermissionsCoordinator] = None,
+        event_loop: Optional[asyncio.AbstractEventLoop] = None,
     ):
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
             NSVariableStatusItemLength
@@ -47,9 +112,27 @@ class StatusIconController:
         self._spinner: Optional[NSProgressIndicator] = None
         self._debounce_task: Optional[asyncio.Task] = None
         self._debounce_delay = 0.1
+        self._event_loop = event_loop
 
-        # Press lifecycle event queue for downstream consumers (lazy-initialized)
-        self._press_events: Optional[asyncio.Queue] = None
+        # Press lifecycle event queue for downstream consumers
+        # The queue will be created on the event loop thread via a helper coroutine
+        if event_loop:
+            # Schedule queue creation on the event loop thread and wait for it
+            async def create_queue():
+                queue = asyncio.Queue()
+                logger.debug("Press events queue created on event loop thread")
+                return queue
+
+            future = asyncio.run_coroutine_threadsafe(create_queue(), event_loop)
+            try:
+                self._press_events = future.result(timeout=2.0)
+                logger.debug("Press events queue initialized with event loop")
+            except Exception as e:
+                logger.error(f"Failed to create press events queue: {e}")
+                self._press_events = None
+        else:
+            self._press_events: Optional[asyncio.Queue] = None
+            logger.warning("No event loop provided, press events queue not initialized")
 
         # Cache icons
         self.icons = {
@@ -107,53 +190,73 @@ class StatusIconController:
         """Setup global hotkey registration."""
         try:
             self._global_hotkey = GlobalHotkey()
-            
-            # Register Space key as the default hotkey for recording
-            # Using Space key (49) with no modifiers
+
+            # Get hotkey configuration from preferences
+            hotkey_config = self.preferences_store.get_hotkey_config() if self.preferences_store else None
+            if hotkey_config:
+                key_code = hotkey_config.keycode
+                modifiers = hotkey_config.modifiers
+            else:
+                # Fallback to F9 with no modifiers
+                key_code = GlobalHotkey.F9
+                modifiers = 0
+
             result = self._global_hotkey.register(
-                key_code=GlobalHotkey.SPACE,
-                modifiers=0,
-                callback=self._on_hotkey_pressed,
+                key_code=key_code,
+                modifiers=modifiers,
+                on_key_down=self._on_hotkey_pressed,
+                on_key_up=self._on_hotkey_released,
                 hotkey_id="recording",
             )
-            
+
             if result:
-                logger.debug("Global hotkey registered for Space key")
+                logger.debug(f"Global hotkey registered: keycode={key_code}, modifiers={modifiers}")
             else:
                 logger.warning("Failed to register global hotkey")
         except Exception as e:
             logger.warning(f"Failed to setup global hotkey: {e}")
 
     def _on_hotkey_pressed(self):
-        """Handle global hotkey press by emitting press lifecycle events."""
-        try:
-            loop = asyncio.get_running_loop()
-            # Emit press lifecycle sequence to match mouse interaction behavior
-            asyncio.create_task(self._hotkey_press_lifecycle())
-        except RuntimeError:
-            logger.warning("No running loop for hotkey_pressed event")
+        """Handle global hotkey press (key down) by starting recording."""
+        logger.info("Hotkey pressed down! Starting recording...")
+        if self._event_loop is None:
+            logger.warning("No event loop available for hotkey callback")
+            return
 
-    async def _hotkey_press_lifecycle(self):
-        """Simulate press-and-hold lifecycle for hotkey."""
+        # Schedule the async task on the event loop
+        asyncio.run_coroutine_threadsafe(
+            self._emit_hotkey_press_events(),
+            self._event_loop
+        )
+
+    def _on_hotkey_released(self):
+        """Handle global hotkey release (key up) by stopping recording."""
+        logger.info("Hotkey released! Stopping recording...")
+        if self._event_loop is None:
+            logger.warning("No event loop available for hotkey callback")
+            return
+
+        # Schedule the async task on the event loop
+        asyncio.run_coroutine_threadsafe(
+            self._emit_press_event("press_released"),
+            self._event_loop
+        )
+
+    async def _emit_hotkey_press_events(self):
+        """Emit press start and hold start events for hotkey press."""
         # Emit press start
         await self._emit_press_event("press_started")
-        
+        logger.debug("Emitted press_started")
+
         # Emit hold threshold to trigger recording entry
         await self._emit_press_event("hold_started")
-        
-        # Emit press release to trigger recording exit
-        await self._emit_press_event("press_released")
+        logger.debug("Emitted hold_started")
 
     @property
     def press_events(self) -> asyncio.Queue:
-        """Get the press events queue, lazily initializing it if needed."""
+        """Get the press events queue."""
         if self._press_events is None:
-            try:
-                self._press_events = asyncio.Queue()
-            except RuntimeError:
-                # No event loop, create a dummy queue-like object
-                logger.warning("No event loop available for press_events queue")
-                self._press_events = asyncio.Queue()
+            raise RuntimeError("Press events queue not initialized - event loop was not provided")
         return self._press_events
 
     async def _emit_press_event(self, event_type: str):
@@ -166,30 +269,36 @@ class StatusIconController:
 
     def _on_press_start(self):
         """Handle press start event."""
-        try:
-            loop = asyncio.get_running_loop()
-            asyncio.create_task(self._emit_press_event("press_started"))
-        except RuntimeError:
-            logger.warning("No running loop for press_started event")
+        if self._event_loop is not None:
+            asyncio.run_coroutine_threadsafe(
+                self._emit_press_event("press_started"),
+                self._event_loop
+            )
+        else:
+            logger.warning("No event loop available for press_started event")
 
     def _on_hold_threshold(self):
         """Handle hold threshold reached event."""
-        try:
-            loop = asyncio.get_running_loop()
-            asyncio.create_task(self._emit_press_event("hold_started"))
-        except RuntimeError:
-            logger.warning("No running loop for hold_started event")
-        
+        if self._event_loop is not None:
+            asyncio.run_coroutine_threadsafe(
+                self._emit_press_event("hold_started"),
+                self._event_loop
+            )
+        else:
+            logger.warning("No event loop available for hold_started event")
+
         self.enter_recording()
 
     def _on_press_end(self):
         """Handle press end event."""
-        try:
-            loop = asyncio.get_running_loop()
-            asyncio.create_task(self._emit_press_event("press_released"))
-        except RuntimeError:
-            logger.warning("No running loop for press_released event")
-        
+        if self._event_loop is not None:
+            asyncio.run_coroutine_threadsafe(
+                self._emit_press_event("press_released"),
+                self._event_loop
+            )
+        else:
+            logger.warning("No event loop available for press_released event")
+
         self.exit_recording()
 
     def _setup_menu(self):
@@ -237,6 +346,7 @@ class StatusIconController:
 
         self.status_item.setMenu_(menu)
 
+    @run_on_main_thread
     def _set_state_immediate(self, state: IconState):
         """Immediately update icon and tooltip without debouncing."""
         self.current_state = state
@@ -320,6 +430,7 @@ class StatusIconController:
         }
         return tooltips.get(state, "Whisper Input")
 
+    @run_on_main_thread
     def _start_spinner(self):
         """Start animated spinner in the status item button."""
         if self._spinner is not None:
@@ -345,6 +456,7 @@ class StatusIconController:
         button.addSubview_(self._spinner_view)
         logger.debug("Started spinner")
 
+    @run_on_main_thread
     def _stop_spinner(self):
         """Stop and remove animated spinner."""
         if self._spinner is None:
@@ -374,11 +486,14 @@ class StatusIconController:
         Set the icon state. Debounces to prevent flicker on rapid transitions.
         Can be called sync or within an event loop.
         """
-        try:
-            loop = asyncio.get_running_loop()
-            asyncio.create_task(self._debounced_set_state(state))
-        except RuntimeError:
-            # No running event loop, set immediately
+        if self._event_loop is not None:
+            # Schedule on the event loop
+            asyncio.run_coroutine_threadsafe(
+                self._debounced_set_state(state),
+                self._event_loop
+            )
+        else:
+            # No event loop, set immediately
             self._set_state_immediate(state)
 
     def enter_recording(self):
@@ -419,9 +534,9 @@ class StatusIconController:
             from .preferences_window import PreferencesWindowController
 
             if self._preferences_window_controller is None:
-                self._preferences_window_controller = PreferencesWindowController(
-                    preferences_store=self.preferences_store,
-                    on_apply=self._on_preferences_applied,
+                self._preferences_window_controller = PreferencesWindowController.alloc().initWithPreferencesStore_onApply_(
+                    self.preferences_store,
+                    self._on_preferences_applied,
                 )
 
             self._preferences_window_controller.show()
@@ -443,7 +558,8 @@ class StatusIconController:
                 result = self._global_hotkey.register(
                     key_code=hotkey_config.keycode,
                     modifiers=hotkey_config.modifiers,
-                    callback=self._on_hotkey_pressed,
+                    on_key_down=self._on_hotkey_pressed,
+                    on_key_up=self._on_hotkey_released,
                     hotkey_id="recording",
                 )
 
@@ -458,6 +574,7 @@ class StatusIconController:
         # and propagated to the orchestrator via preference change listeners.
         # The orchestrator reloads the transcriber when language changes.
 
+    @run_on_main_thread
     def _update_permission_status(self) -> None:
         """Update the permission status menu item."""
         if self._permission_status_item is None:
@@ -491,6 +608,19 @@ class StatusIconController:
 
         # Refresh icon to show/hide warning badge based on new permission state
         self._set_state_immediate(self.current_state)
+
+        # If accessibility permission was just granted and we have a hotkey configured,
+        # retry setting up the global hotkey
+        if (status.accessibility == PermissionState.GRANTED and
+            self._global_hotkey is not None and
+            self._enable_hotkey):
+            try:
+                if self._global_hotkey.retry_setup():
+                    logger.info("Global hotkey monitoring started after permission grant")
+                else:
+                    logger.warning("Failed to start global hotkey monitoring after permission grant")
+            except Exception as e:
+                logger.error(f"Error retrying global hotkey setup: {e}")
 
         logger.debug(f"Permission display updated: {status.to_dict()}")
 

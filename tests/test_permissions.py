@@ -21,7 +21,7 @@ def temp_preferences_file():
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
         temp_path = Path(f.name)
         prefs_data = {
-            "hotkey_keycode": 49,
+            "hotkey_keycode": 101,
             "hotkey_modifiers": 0,
             "auto_punctuation": True,
             "language": "en",

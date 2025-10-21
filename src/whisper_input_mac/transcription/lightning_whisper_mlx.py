@@ -21,7 +21,7 @@ class TranscriptionError(Exception):
 @dataclass
 class TranscriptionConfig:
     """Configuration for transcription settings."""
-    model_name: str = "base"
+    model_name: str = "medium"
     temperature: float = 0.0
     language: Optional[str] = None
     prompt: Optional[str] = None
@@ -86,9 +86,12 @@ class LightningWhisperTranscriber:
                 f"Loading model '{self._config.model_name}' "
                 f"with cache dir: {self._config.cache_dir}"
             )
+            # Initialize LightningWhisperMLX
+            # Note: The library handles model caching internally, we just specify the model name
             self._pipeline = LightningWhisperMLX(
                 model=self._config.model_name,
-                download_root=str(self._config.cache_dir),
+                batch_size=6,  # Default batch size for good performance
+                quant=None,    # No quantization by default
             )
             logger.info(f"Model '{self._config.model_name}' loaded successfully")
         except Exception as e:

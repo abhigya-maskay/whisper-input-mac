@@ -11,17 +11,26 @@ from Cocoa import (
     NSButton,
     NSTextField,
     NSTextAlignment,
+    NSCenterTextAlignment,
     NSFont,
     NSRect,
     NSMakeRect,
     NSBezelBorder,
     NSEvent,
     NSKeyDown,
+    NSKeyDownMask,
+    NSFlagsChangedMask,
+    NSCommandKeyMask,
+    NSShiftKeyMask,
+    NSAlternateKeyMask,
+    NSControlKeyMask,
     NSApplication,
     NSPopUpButton,
     NSMenu,
     NSMenuItem,
+    NSObject,
 )
+import objc
 
 from .preferences import PreferencesStore, PreferenceKey, HotkeyConfig
 
@@ -46,13 +55,37 @@ SUPPORTED_LANGUAGES = {
 }
 
 
-class PreferencesWindowController:
+class PreferencesWindowController(NSObject):
     """Controller for the native preferences window."""
 
-    def __init__(
+    def init(self):
+        """Initialize as NSObject."""
+        self = objc.super(PreferencesWindowController, self).init()
+        if self is None:
+            return None
+
+        # Instance variables
+        self.preferences = None
+        self.on_apply = None
+        self.window = None
+
+        # UI elements
+        self.hotkey_field = None
+        self.auto_punctuation_checkbox = None
+        self.language_popup = None
+
+        # Temporary hotkey state (while recording)
+        self._recording_hotkey = False
+        self._temp_hotkey_keycode = None
+        self._temp_hotkey_modifiers = None
+        self._event_monitor = None
+
+        return self
+
+    def initWithPreferencesStore_onApply_(
         self,
         preferences_store: PreferencesStore,
-        on_apply: Optional[Callable[[HotkeyConfig, bool, str], None]] = None,
+        on_apply: Optional[Callable[[HotkeyConfig, bool, str], None]],
     ):
         """
         Initialize the preferences window controller.
@@ -61,19 +94,14 @@ class PreferencesWindowController:
             preferences_store: PreferencesStore instance
             on_apply: Callback(hotkey_config, auto_punctuation, language) when Apply is clicked
         """
+        self = self.init()
+        if self is None:
+            return None
+
         self.preferences = preferences_store
         self.on_apply = on_apply
-        self.window: Optional[NSWindow] = None
 
-        # UI elements
-        self.hotkey_field: Optional[NSTextField] = None
-        self.auto_punctuation_checkbox: Optional[NSButton] = None
-        self.language_popup: Optional[NSPopUpButton] = None
-
-        # Temporary hotkey state (while recording)
-        self._recording_hotkey = False
-        self._temp_hotkey_keycode: Optional[int] = None
-        self._temp_hotkey_modifiers: Optional[int] = None
+        return self
 
     def show(self) -> None:
         """Show the preferences window."""
@@ -125,7 +153,7 @@ class PreferencesWindowController:
 
         self.hotkey_field = NSTextField.alloc().initWithFrame_(NSMakeRect(170, 205, 180, 30))
         self.hotkey_field.setEditable_(False)
-        self.hotkey_field.setAlignment_(NSTextAlignment.NSCenterTextAlignment)
+        self.hotkey_field.setAlignment_(NSCenterTextAlignment)
         content_view.addSubview_(self.hotkey_field)
 
         record_button = NSButton.alloc().initWithFrame_(NSMakeRect(360, 205, 70, 30))
@@ -172,7 +200,7 @@ class PreferencesWindowController:
         info_label.setEditable_(False)
         info_label.setSelectable_(False)
         info_label.setFont_(NSFont.systemFontOfSize_(11))
-        info_label.setAlignment_(NSTextAlignment.NSCenterTextAlignment)
+        info_label.setAlignment_(NSCenterTextAlignment)
         content_view.addSubview_(info_label)
 
         # Buttons
@@ -229,14 +257,29 @@ class PreferencesWindowController:
         Returns:
             String representation of hotkey
         """
-        # Common keycodes
+        # Common keycodes (macOS/Carbon keycodes)
         keycode_names = {
+            # Special keys
             49: "Space",
             36: "Return",
             53: "Escape",
             51: "Delete",
             48: "Tab",
-            # Add more as needed
+            117: "Delete Forward",
+            # Function keys
+            122: "F1", 120: "F2", 99: "F3", 118: "F4",
+            96: "F5", 97: "F6", 98: "F7", 100: "F8",
+            101: "F9", 109: "F10", 103: "F11", 111: "F12",
+            # Letters
+            0: "A", 11: "B", 8: "C", 2: "D", 14: "E", 3: "F", 5: "G", 4: "H",
+            34: "I", 38: "J", 40: "K", 37: "L", 46: "M", 45: "N", 31: "O", 35: "P",
+            12: "Q", 15: "R", 1: "S", 17: "T", 32: "U", 9: "V", 13: "W", 7: "X",
+            16: "Y", 6: "Z",
+            # Numbers
+            29: "0", 18: "1", 19: "2", 20: "3", 21: "4", 23: "5",
+            22: "6", 26: "7", 28: "8", 25: "9",
+            # Arrow keys
+            123: "←", 124: "→", 125: "↓", 126: "↑",
         }
 
         # Modifier flags (Carbon)
@@ -263,10 +306,57 @@ class PreferencesWindowController:
         # Update field to show recording state
         self.hotkey_field.setStringValue_("Press a key combination...")
 
+        # Remove existing monitor if any
+        self._stop_event_monitor()
+
         # Set up key event monitor
-        # Note: This is a simplified implementation. A production version would
-        # use NSEvent addLocalMonitorForEventsMatchingMask for proper key capture.
-        # For now, we'll use a basic approach.
+        def event_handler(event):
+            if event.type() == NSKeyDown:
+                keycode = event.keyCode()
+                modifiers = event.modifierFlags()
+
+                # Convert NSEvent modifiers to Carbon modifiers
+                carbon_modifiers = 0
+                if modifiers & NSCommandKeyMask:
+                    carbon_modifiers |= (1 << 8)  # cmdKey
+                if modifiers & NSShiftKeyMask:
+                    carbon_modifiers |= (1 << 9)  # shiftKey
+                if modifiers & NSAlternateKeyMask:
+                    carbon_modifiers |= (1 << 11)  # optionKey
+                if modifiers & NSControlKeyMask:
+                    carbon_modifiers |= (1 << 12)  # controlKey
+
+                # Store the hotkey
+                self._temp_hotkey_keycode = keycode
+                self._temp_hotkey_modifiers = carbon_modifiers
+
+                # Update display
+                hotkey_str = self._format_hotkey(keycode, carbon_modifiers)
+                self.hotkey_field.setStringValue_(hotkey_str)
+
+                # Stop recording
+                self._recording_hotkey = False
+                self._stop_event_monitor()
+
+                logger.info(f"Hotkey captured: keycode={keycode}, modifiers={carbon_modifiers}")
+
+                # Block this event from being processed further
+                return None
+
+            return event
+
+        # Install local event monitor
+        self._event_monitor = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+            NSKeyDownMask, event_handler
+        )
+        logger.debug("Key event monitor installed")
+
+    def _stop_event_monitor(self) -> None:
+        """Stop and remove the key event monitor."""
+        if self._event_monitor is not None:
+            NSEvent.removeMonitor_(self._event_monitor)
+            self._event_monitor = None
+            logger.debug("Key event monitor removed")
 
     def apply_(self, sender) -> None:
         """Apply preferences and close window."""
@@ -314,7 +404,8 @@ class PreferencesWindowController:
                 except Exception as e:
                     logger.error(f"Error in on_apply callback: {e}")
 
-            # Close window
+            # Clean up and close window
+            self._stop_event_monitor()
             self.window.close()
 
         except Exception as e:
@@ -358,6 +449,7 @@ class PreferencesWindowController:
     def cancel_(self, sender) -> None:
         """Cancel and close window."""
         logger.info("Preferences cancelled")
+        self._stop_event_monitor()
         self.window.close()
 
 

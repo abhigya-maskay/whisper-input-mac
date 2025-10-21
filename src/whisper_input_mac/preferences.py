@@ -28,8 +28,8 @@ class HotkeyConfig:
 
     @staticmethod
     def default() -> "HotkeyConfig":
-        """Return default hotkey config (Space key, no modifiers)."""
-        return HotkeyConfig(keycode=49, modifiers=0)
+        """Return default hotkey config (F9 key, no modifiers)."""
+        return HotkeyConfig(keycode=101, modifiers=0)
 
 
 @dataclass
@@ -37,7 +37,7 @@ class PreferencesSchema:
     """Schema for preferences with validation and defaults."""
 
     # Hotkey configuration
-    hotkey_keycode: int = 49  # Space key
+    hotkey_keycode: int = 101  # F9 key
     hotkey_modifiers: int = 0  # No modifiers
 
     # Transcription settings
@@ -56,7 +56,7 @@ class PreferencesSchema:
     def from_dict(data: Dict[str, Any]) -> "PreferencesSchema":
         """Create from dictionary with validation."""
         return PreferencesSchema(
-            hotkey_keycode=data.get("hotkey_keycode", 49),
+            hotkey_keycode=data.get("hotkey_keycode", 101),
             hotkey_modifiers=data.get("hotkey_modifiers", 0),
             auto_punctuation=data.get("auto_punctuation", True),
             language=data.get("language", "en"),

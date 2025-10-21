@@ -10,12 +10,12 @@ from .preferences import PreferencesStore, PreferenceKey
 
 # Import PyObjC frameworks
 try:
-    from Cocoa import AVAudioSession, NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
-    from Quartz import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+    from Cocoa import NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
+    from HIServices import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
 except ImportError as e:
     raise ImportError(
         f"Required PyObjC frameworks not available: {e}. "
-        "Ensure pyobjc-framework-Cocoa and pyobjc-framework-Quartz are installed."
+        "Ensure pyobjc-framework-Cocoa and pyobjc-framework-ApplicationServices are installed."
     ) from e
 
 logger = logging.getLogger(__name__)
@@ -127,37 +127,55 @@ class PermissionsCoordinator:
 
     async def _request_microphone_permission(self) -> bool:
         """
-        Request microphone permission from the user.
+        Request microphone permission from the user using AVCaptureDevice.
 
         Returns:
             True if granted, False if denied or timeout
         """
         logger.info("Requesting microphone permission from user...")
 
-        permission_result = [None]
-        event = asyncio.Event()
-
-        def permission_handler(granted):
-            permission_result[0] = granted
-            event.set()
-
-        # Request permission on main thread via AVAudioSession
-        def request_on_main_thread():
-            session = AVAudioSession.sharedInstance()
-            session.requestRecordPermission_(permission_handler)
-
-        # Execute request
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, request_on_main_thread)
-
-        # Wait for user response with timeout
         try:
-            await asyncio.wait_for(event.wait(), timeout=30.0)
-            granted = permission_result[0] if permission_result[0] is not None else False
+            # Import AVCaptureDevice
+            from AVFoundation import AVCaptureDevice, AVMediaTypeAudio, AVAuthorizationStatusAuthorized
+
+            # Request permission synchronously (it's a simple API call)
+            loop = asyncio.get_running_loop()
+
+            def request_permission():
+                # First check current status
+                status = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)
+
+                if status == AVAuthorizationStatusAuthorized:
+                    return True
+
+                # Request permission - this will show system prompt if needed
+                # We use requestAccessForMediaType_completionHandler_ but since we can't
+                # properly handle the block callback in PyObjC, we'll poll the status instead
+                import time
+
+                # Trigger the permission request by trying to access the device
+                AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+                    AVMediaTypeAudio,
+                    lambda granted: None  # Dummy callback
+                )
+
+                # Poll for status change (up to 30 seconds)
+                for _ in range(60):  # 60 * 0.5 = 30 seconds
+                    time.sleep(0.5)
+                    status = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)
+                    if status == AVAuthorizationStatusAuthorized:
+                        return True
+                    elif status != 0:  # 0 = NotDetermined, anything else means decided
+                        return False
+
+                return False
+
+            granted = await loop.run_in_executor(None, request_permission)
             logger.info(f"Microphone permission: {'granted' if granted else 'denied'}")
             return granted
-        except asyncio.TimeoutError:
-            logger.warning("Microphone permission request timed out")
+
+        except Exception as e:
+            logger.error(f"Error requesting microphone permission: {e}")
             return False
 
     def check_accessibility_permission(self, prompt: bool = False) -> PermissionState:
@@ -278,14 +296,18 @@ class PermissionsCoordinator:
         """Show alert when microphone permission is denied."""
         logger.debug("Showing microphone denied dialog")
 
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_("Microphone Access Required")
-        alert.setInformativeText_(
-            "Whisper Input needs microphone access to transcribe your speech. "
-            "Please grant permission in System Settings → Privacy & Security → Microphone."
-        )
-        alert.addButtonWithTitle_("OK")
-        alert.runModal()
+        # NSAlert must be created and shown on the main thread
+        # Use subprocess to open System Settings instead of showing a modal dialog
+        # since we're being called from a background thread
+        try:
+            import subprocess
+            logger.info("Opening System Settings for microphone permissions")
+            subprocess.run(
+                ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"],
+                check=False
+            )
+        except Exception as e:
+            logger.error(f"Failed to open System Settings: {e}")
 
     async def _show_accessibility_denied_dialog(self) -> None:
         """Show alert when accessibility permission is denied."""

@@ -20,7 +20,7 @@ def temp_preferences_file():
         temp_path = Path(f.name)
         # Write default preferences
         prefs_data = {
-            "hotkey_keycode": 49,
+            "hotkey_keycode": 101,
             "hotkey_modifiers": 0,
             "auto_punctuation": True,
             "language": "en",
@@ -40,7 +40,7 @@ def test_preferences_schema_defaults():
     """Test that PreferencesSchema has correct defaults."""
     schema = PreferencesSchema()
 
-    assert schema.hotkey_keycode == 49  # Space key
+    assert schema.hotkey_keycode == 101  # F9 key
     assert schema.hotkey_modifiers == 0
     assert schema.auto_punctuation is True
     assert schema.language == "en"
@@ -133,7 +133,7 @@ def test_preferences_store_init_creates_file(temp_preferences_file):
     store = PreferencesStore(preferences_path=temp_preferences_file)
 
     assert temp_preferences_file.exists()
-    assert store.schema.hotkey_keycode == 49
+    assert store.schema.hotkey_keycode == 101
 
 
 def test_preferences_store_load_existing(temp_preferences_file):
@@ -166,7 +166,7 @@ def test_preferences_store_get(temp_preferences_file):
     hotkey_keycode = store.get(PreferenceKey.HOTKEY_KEYCODE)
     auto_punct = store.get(PreferenceKey.AUTO_PUNCTUATION)
 
-    assert hotkey_keycode == 49
+    assert hotkey_keycode == 101
     assert auto_punct is True
 
 
@@ -193,7 +193,7 @@ def test_preferences_store_set_invalid_value(temp_preferences_file):
     success = store.set(PreferenceKey.HOTKEY_KEYCODE, -1, save=True)
 
     assert success is False
-    assert store.get(PreferenceKey.HOTKEY_KEYCODE) == 49  # Unchanged
+    assert store.get(PreferenceKey.HOTKEY_KEYCODE) == 101  # Unchanged
 
 
 def test_preferences_store_get_hotkey_config(temp_preferences_file):
@@ -203,7 +203,7 @@ def test_preferences_store_get_hotkey_config(temp_preferences_file):
     config = store.get_hotkey_config()
 
     assert isinstance(config, HotkeyConfig)
-    assert config.keycode == 49
+    assert config.keycode == 101
     assert config.modifiers == 0
 
 
@@ -273,14 +273,14 @@ def test_preferences_store_reset_to_defaults(temp_preferences_file):
 
     assert success is True
     assert store.get(PreferenceKey.AUTO_PUNCTUATION) is True
-    assert store.get(PreferenceKey.HOTKEY_KEYCODE) == 49
+    assert store.get(PreferenceKey.HOTKEY_KEYCODE) == 101
 
 
 def test_hotkey_config_default():
     """Test HotkeyConfig.default()."""
     config = HotkeyConfig.default()
 
-    assert config.keycode == 49
+    assert config.keycode == 101
     assert config.modifiers == 0
 
 
@@ -293,5 +293,5 @@ def test_preferences_store_load_invalid_json(temp_preferences_file):
     store = PreferencesStore(preferences_path=temp_preferences_file)
 
     # Should fall back to defaults
-    assert store.schema.hotkey_keycode == 49
+    assert store.schema.hotkey_keycode == 101
     assert store.schema.auto_punctuation is True
